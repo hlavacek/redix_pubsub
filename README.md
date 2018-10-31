@@ -29,6 +29,7 @@ TODO:
 
 - use redis streams consumer groups
 - work with unsuscribe (does not work at all at the moment)
+- no tests for xread at the moment
 
 # Redix PubSub
 
