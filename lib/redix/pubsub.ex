@@ -137,7 +137,7 @@ defmodule Redix.PubSub do
       {:ok, pubsub} = Redix.PubSub.start_link()
       {:ok, client} = Redix.start_link()
 
-      Redix.PubSub.subscribe(pubsub, "my_channel", self())
+      {:ok, ref} = Redix.PubSub.subscribe(pubsub, "my_channel", self())
       #=> {:ok, ref}
 
       # We wait for the subscription confirmation
@@ -145,7 +145,7 @@ defmodule Redix.PubSub do
         {:redix_pubsub, ^pubsub, ^ref, :subscribed, %{channel: "my_channel"}} -> :ok
       end
 
-      Redix.command!(client, ~w(PUBLISH my_channel hello)
+      Redix.command!(client, ~w(XADD my_channel * sensor-id 1234 temperature 19.8))
 
       receive do
         {:redix_pubsub, ^pubsub, ^ref, :message, %{channel: "my_channel"} = properties} ->
@@ -395,34 +395,6 @@ defmodule Redix.PubSub do
   end
 
   @doc """
-  Subscribes `subscriber` to the given pattern or list of patterns.
-
-  Works like `subscribe/3` but subscribing `subscriber` to a pattern (or list of
-  patterns) instead of regular channels.
-
-  Upon successful subscription to each of the `patterns`, a message will be sent
-  to `subscriber` with the following form:
-
-      {:redix_pubsub, pid, ^subscription_ref, :psubscribed, %{pattern: pattern}}
-
-  See the documentation for `Redix.PubSub` for more information about the format
-  of messages.
-
-  ## Examples
-
-      iex> Redix.psubscribe(conn, "ba*", self())
-      :ok
-      iex> flush()
-      {:redix_pubsub, ^conn, ^subscription_ref, :psubscribe, %{pattern: "ba*"}}
-      :ok
-
-  """
-  @spec psubscribe(connection(), String.t() | [String.t()], subscriber) :: {:ok, reference}
-  def psubscribe(conn, patterns, subscriber \\ self()) do
-    :gen_statem.call(conn, {:psubscribe, List.wrap(patterns), subscriber})
-  end
-
-  @doc """
   Unsubscribes `subscriber` from the given channel or list of channels.
 
   This function basically "undoes" what `subscribe/3` does: it unsubscribes
@@ -451,31 +423,4 @@ defmodule Redix.PubSub do
     :gen_statem.call(conn, {:unsubscribe, List.wrap(channels), subscriber})
   end
 
-  @doc """
-  Unsubscribes `subscriber` from the given pattern or list of patterns.
-
-  This function basically "undoes" what `psubscribe/3` does: it unsubscribes
-  `subscriber` from the given pattern or list of patterns.
-
-  Upon successful unsubscription from each of the `patterns`, a message will be
-  sent to `subscriber` with the following form:
-
-      {:redix_pubsub, pid, ^subscription_ref, :punsubscribed, %{pattern: pattern}}
-
-  See the documentation for `Redix.PubSub` for more information about the format
-  of messages.
-
-  ## Examples
-
-      iex> Redix.punsubscribe(conn, "foo_*", self())
-      :ok
-      iex> flush()
-      {:redix_pubsub, ^conn, ^subscription_ref, :punsubscribed, %{pattern: "foo_*"}}
-      :ok
-
-  """
-  @spec punsubscribe(connection(), String.t() | [String.t()], subscriber) :: :ok
-  def punsubscribe(conn, patterns, subscriber \\ self()) do
-    :gen_statem.call(conn, {:punsubscribe, List.wrap(patterns), subscriber})
-  end
 end

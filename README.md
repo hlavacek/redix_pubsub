@@ -1,3 +1,35 @@
+# DO NOT USE
+
+This is an attempt to modify the original pub_sub library to work with redis streams instead of redis pub sub.
+
+What works now:
+
+```elixir
+{:ok, pubsub} = Redix.PubSub.start_link()
+{:ok, client} = Redix.start_link()
+
+{:ok, ref} = Redix.PubSub.subscribe(pubsub, "my_channel", self())
+#=> {:ok, ref}
+
+# We wait for the subscription confirmation
+receive do
+  {:redix_pubsub, ^pubsub, ^ref, :subscribed, %{channel: "my_channel"}} -> :ok
+end
+
+Redix.command!(client, ~w(XADD my_channel * sensor-id 1234 temperature 19.8))
+
+receive do
+  {:redix_pubsub, ^pubsub, ^ref, :message, %{channel: "my_channel"} = properties} ->
+  properties.payload
+end
+#=> [["1541027511486-0", ["sensor-id", "1234", "temperature", "19.8"]]]
+```
+
+TODO:
+
+- use redis streams consumer groups
+- work with unsuscribe (does not work at all at the moment)
+
 # Redix PubSub
 
 [![Build Status](https://travis-ci.org/whatyouhide/redix_pubsub.svg?branch=master)](https://travis-ci.org/whatyouhide/redix_pubsub)

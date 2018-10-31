@@ -110,12 +110,12 @@ defmodule Redix.PubSub.Connection do
   end
 
   def disconnected({:call, from}, {operation, targets, pid}, data)
-      when operation in [:subscribe, :psubscribe] do
+      when operation in [:subscribe] do
     {data, ref} = monitor_new(data, pid)
     :ok = :gen_statem.reply(from, {:ok, ref})
 
     # We can just add subscribers to channels here since when we'll reconnect, the connection
-    # will have to reconnect to all the channels/patterns anyways.
+    # will have to reconnect to all the channels anyways.
     {_targets_to_subscribe_to, data} = subscribe_pid_to_targets(data, operation, targets, pid)
 
     send(pid, ref, :disconnected, %{reason: data.last_disconnect_reason})
@@ -124,7 +124,7 @@ defmodule Redix.PubSub.Connection do
   end
 
   def disconnected({:call, from}, {operation, targets, pid}, data)
-      when operation in [:unsubscribe, :punsubscribe] do
+      when operation in [:unsubscribe] do
     :ok = :gen_statem.reply(from, :ok)
 
     case data.monitors[pid] do
@@ -132,11 +132,7 @@ defmodule Redix.PubSub.Connection do
         {_targets_to_unsubscribe_from, data} =
           unsubscribe_pid_from_targets(data, operation, targets, pid)
 
-        {kind, target_type} =
-          case operation do
-            :unsubscribe -> {:unsubscribed, :channel}
-            :punsubscribe -> {:punsubscribed, :pattern}
-          end
+        {kind, target_type} = {:unsubscribed, :channel}
 
         Enum.each(targets, fn target ->
           send(pid, ref, kind, %{target_type => target})
@@ -151,8 +147,8 @@ defmodule Redix.PubSub.Connection do
   end
 
   def connected(:internal, :handle_connection, data) do
-    # We clean up channels/patterns that don't have any subscribers. We do this because some
-    # subscribers could have unsubscribed from a channel/pattern while disconnected.
+    # We clean up channels that don't have any subscribers. We do this because some
+    # subscribers could have unsubscribed from a channel while disconnected.
     data =
       update_in(data.subscriptions, fn subscriptions ->
         :maps.filter(fn _target, subscribers -> MapSet.size(subscribers) > 0 end, subscriptions)
@@ -168,53 +164,35 @@ defmodule Redix.PubSub.Connection do
         channel
       end
 
-    patterns_to_subscribe_to =
-      for {{:pattern, pattern}, subscribers} <- data.subscriptions do
-        Enum.each(subscribers, fn pid ->
-          ref = Map.fetch!(data.monitors, pid)
-          send(pid, ref, :psubscribe, %{pattern: pattern})
-        end)
-
-        pattern
-      end
-
-    case subscribe(data, channels_to_subscribe_to, patterns_to_subscribe_to) do
+    case subscribe(data, channels_to_subscribe_to) do
       :ok -> {:keep_state, data}
       {:error, reason} -> disconnect(data, reason)
     end
   end
 
   def connected({:call, from}, {operation, targets, pid}, data)
-      when operation in [:subscribe, :psubscribe] do
+      when operation in [:subscribe] do
     {data, ref} = monitor_new(data, pid)
     :ok = :gen_statem.reply(from, {:ok, ref})
 
     {targets_to_subscribe_to, data} = subscribe_pid_to_targets(data, operation, targets, pid)
 
-    {kind, target_type} =
-      case operation do
-        :subscribe -> {:subscribed, :channel}
-        :psubscribe -> {:psubscribed, :pattern}
-      end
+    {kind, target_type} = {:subscribed, :channel}
 
     Enum.each(targets, fn target ->
       send(pid, ref, kind, %{target_type => target})
     end)
 
-    {channels_to_subscribe_to, patterns_to_subscribe_to} =
-      case operation do
-        :subscribe -> {targets_to_subscribe_to, []}
-        :psubscribe -> {[], targets_to_subscribe_to}
-      end
+    channels_to_subscribe_to = targets_to_subscribe_to
 
-    case subscribe(data, channels_to_subscribe_to, patterns_to_subscribe_to) do
+    case subscribe(data, channels_to_subscribe_to) do
       :ok -> {:keep_state, data}
       {:error, reason} -> disconnect(data, reason)
     end
   end
 
   def connected({:call, from}, {operation, targets, pid}, data)
-      when operation in [:unsubscribe, :punsubscribe] do
+      when operation in [:unsubscribe] do
     :ok = :gen_statem.reply(from, :ok)
 
     case data.monitors[pid] do
@@ -222,11 +200,7 @@ defmodule Redix.PubSub.Connection do
         {targets_to_unsubscribe_from, data} =
           unsubscribe_pid_from_targets(data, operation, targets, pid)
 
-        {kind, target_type} =
-          case operation do
-            :unsubscribe -> {:unsubscribed, :channel}
-            :punsubscribe -> {:punsubscribed, :pattern}
-          end
+        {kind, target_type} = {:unsubscribed, :channel}
 
         Enum.each(targets, fn target ->
           send(pid, ref, kind, %{target_type => target})
@@ -234,13 +208,9 @@ defmodule Redix.PubSub.Connection do
 
         data = demonitor_if_not_subscribed_to_anything(data, pid)
 
-        {channels_to_unsubscribe_from, patterns_to_unsubscribe_from} =
-          case operation do
-            :unsubscribe -> {targets_to_unsubscribe_from, []}
-            :punsubscribe -> {[], targets_to_unsubscribe_from}
-          end
+        channels_to_unsubscribe_from = targets_to_unsubscribe_from
 
-        case unsubscribe(data, channels_to_unsubscribe_from, patterns_to_unsubscribe_from) do
+        case unsubscribe(data, channels_to_unsubscribe_from) do
           :ok -> {:keep_state, data}
           {:error, reason} -> disconnect(data, reason)
         end
@@ -286,10 +256,7 @@ defmodule Redix.PubSub.Connection do
     channels_to_unsubscribe_from =
       for {:channel, channel} <- targets_to_unsubscribe_from, do: channel
 
-    patterns_to_unsubscribe_from =
-      for {:pattern, pattern} <- targets_to_unsubscribe_from, do: pattern
-
-    case unsubscribe(data, channels_to_unsubscribe_from, patterns_to_unsubscribe_from) do
+    case unsubscribe(data, channels_to_unsubscribe_from) do
       :ok -> {:keep_state, data}
       {:error, reason} -> disconnect(data, reason)
     end
@@ -304,6 +271,7 @@ defmodule Redix.PubSub.Connection do
   defp new_bytes(data, bytes) do
     case (data.continuation || (&Protocol.parse/1)).(bytes) do
       {:ok, resp, rest} ->
+
         data = handle_pubsub_msg(data, resp)
         new_bytes(%{data | continuation: nil}, rest)
 
@@ -313,10 +281,11 @@ defmodule Redix.PubSub.Connection do
   end
 
   defp handle_pubsub_msg(data, [operation, _target, _count])
-       when operation in ["subscribe", "psubscribe", "unsubscribe", "punsubscribe"] do
+       when operation in ["subscribe", "unsubscribe"] do
     data
   end
 
+  # TODO remove this, it is handler for pubsub, not used in streams
   defp handle_pubsub_msg(data, ["message", channel, payload]) do
     subscribers = Map.get(data.subscriptions, {:channel, channel}, [])
     properties = %{channel: channel, payload: payload}
@@ -329,13 +298,13 @@ defmodule Redix.PubSub.Connection do
     data
   end
 
-  defp handle_pubsub_msg(data, ["pmessage", pattern, channel, payload]) do
-    subscribers = Map.get(data.subscriptions, {:pattern, pattern}, [])
-    properties = %{channel: channel, pattern: pattern, payload: payload}
+  defp handle_pubsub_msg(data, [[channel, payload]]) do
+    subscribers = Map.get(data.subscriptions, {:channel, channel}, [])
+    properties = %{channel: channel, payload: payload}
 
     Enum.each(subscribers, fn pid ->
       ref = Map.fetch!(data.monitors, pid)
-      send(pid, ref, :pmessage, properties)
+      send(pid, ref, :message, properties)
     end)
 
     data
@@ -390,32 +359,24 @@ defmodule Redix.PubSub.Connection do
     end)
   end
 
-  defp subscribe(_data, [], []) do
+  defp subscribe(_data, []) do
     :ok
   end
 
-  defp subscribe(data, channels, patterns) do
-    pipeline =
-      case {channels, patterns} do
-        {channels, []} -> [["SUBSCRIBE" | channels]]
-        {[], patterns} -> [["PSUBSCRIBE" | patterns]]
-        {channels, patterns} -> [["SUBSCRIBE" | channels], ["PSUBSCRIBE" | patterns]]
-      end
+  defp subscribe(data, channels) do
+    # TODO we should do xread for some time and then check if we're not unsubscribed
+    pipeline = [["XREAD", "BLOCK", "0", "STREAMS"] ++ channels ++ ["$"]]
 
+    # BLOCK 0 STREAMS mystream $
     transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
   end
 
-  defp unsubscribe(_data, [], []) do
+  defp unsubscribe(_data, []) do
     :ok
   end
 
-  defp unsubscribe(data, channels, patterns) do
-    pipeline =
-      case {channels, patterns} do
-        {channels, []} -> [["UNSUBSCRIBE" | channels]]
-        {[], patterns} -> [["PUNSUBSCRIBE" | patterns]]
-        {channels, patterns} -> [["UNSUBSCRIBE" | channels], ["PUNSUBSCRIBE" | patterns]]
-      end
+  defp unsubscribe(data, channels) do
+    pipeline = [["UNSUBSCRIBE" | channels]]
 
     transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
   end
@@ -458,8 +419,6 @@ defmodule Redix.PubSub.Connection do
 
   defp key_for_target(:subscribe, channel), do: {:channel, channel}
   defp key_for_target(:unsubscribe, channel), do: {:channel, channel}
-  defp key_for_target(:psubscribe, pattern), do: {:pattern, pattern}
-  defp key_for_target(:punsubscribe, pattern), do: {:pattern, pattern}
 
   defp setopts(data, socket, opts) do
     inets_mod(data.transport).setopts(socket, opts)
