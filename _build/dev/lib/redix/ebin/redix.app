@@ -1,0 +1,11 @@
+{application,redix,
+             [{applications,[kernel,stdlib,elixir,logger]},
+              {description,"Fast, pipelined, resilient Redis driver for Elixir."},
+              {modules,['Elixir.Redix','Elixir.Redix.Connection',
+                        'Elixir.Redix.ConnectionError','Elixir.Redix.Error',
+                        'Elixir.Redix.Protocol',
+                        'Elixir.Redix.Protocol.ParseError',
+                        'Elixir.Redix.SocketOwner','Elixir.Redix.URI',
+                        'Elixir.Redix.Utils']},
+              {registered,[]},
+              {vsn,"0.8.1"}]}.
