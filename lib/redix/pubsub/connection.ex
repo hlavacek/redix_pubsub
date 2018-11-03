@@ -306,6 +306,12 @@ defmodule Redix.PubSub.Connection do
       ref = Map.fetch!(data.monitors, pid)
       send(pid, ref, :message, properties)
     end)
+    # we need to subscribe again for new messages ... because xread just gives back one
+
+    case subscribers do
+      [] -> :ok
+      _ -> subscribe(data, [channel], payload)
+    end
 
     data
   end
@@ -364,10 +370,17 @@ defmodule Redix.PubSub.Connection do
   end
 
   defp subscribe(data, channels) do
-    # TODO we should do xread for some time and then check if we're not unsubscribed
     pipeline = [["XREAD", "BLOCK", "0", "STREAMS"] ++ channels ++ ["$"]]
 
     # BLOCK 0 STREAMS mystream $
+    transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
+  end
+
+  defp subscribe(data, channels, payload) do
+    # sample payload [["1541027511486-0", ["sensor-id", "1234", "temperature", "19.8"]]]
+    [ firstMsg | _ ] = payload
+    [ firstMsgId | _ ]  = firstMsg
+    pipeline = [["XREAD", "BLOCK", "0", "STREAMS"] ++ channels ++ [firstMsgId]]
     transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
   end
 
